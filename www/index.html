@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>PhoneInput - 手机当输入法</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0f1220; color: #e6e8f0;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-user-select: none; user-select: none; }
+  .wrap { display: flex; flex-direction: column; height: 100%; padding: 12px; gap: 10px; }
+  .bar { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #888; }
+  .dot.on { background: #36d399; }
+  .dot.off { background: #f87272; }
+  .cfg { margin-left: auto; font-size: 13px; color: #8b90a8; display: flex; align-items: center; gap: 4px; }
+  .cfg select { font-size: 13px; background: #1a1f35; color: #e6e8f0; border: none; border-radius: 6px; padding: 2px 4px; }
+  /* 触发区：点击唤起键盘 */
+  .tap { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center;
+    border: 2px dashed #2a3155; border-radius: 14px; font-size: 17px; color: #8b90a8;
+    padding: 16px; line-height: 1.6; }
+  .tap:active { background: #1a1f35; }
+  /* 隐藏的 IME 载体：不显示，只承接软键盘/语音，用于取增量 */
+  #ime { position: absolute; left: -9999px; top: 0; opacity: 0; }
+  .last-title { font-size: 12px; color: #8b90a8; }
+  .last { min-height: 44px; background: #1a1f35; border-radius: 10px; padding: 10px 12px;
+    font-size: 16px; line-height: 1.6; word-break: break-all; color: #c7cce0; }
+  .last.empty { color: #5a607a; font-size: 14px; }
+  .last .op { color: #8b90a8; font-size: 13px; margin-right: 4px; }
+  .last .txt { color: #c7cce0; }
+  .last .key { color: #36d399; font-weight: 600; }
+  .hint { font-size: 12px; color: #8b90a8; text-align: center; }
+  .keys-title { font-size: 12px; color: #8b90a8; }
+  .keys { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .keys button { padding: 12px 0; border: none; border-radius: 10px; font-size: 15px; font-weight: 600;
+    background: #232a47; color: #e6e8f0; -webkit-tap-highlight-color: transparent; }
+  .keys button:active { background: #313a63; }
+  .keys .ctrl { background: #2a3155; font-size: 13px; }
+  .actions { display: flex; gap: 10px; }
+  .actions button { flex: 1; padding: 13px; border: none; border-radius: 10px;
+    font-size: 15px; font-weight: 600; background: #232a47; color: #e6e8f0;
+    -webkit-tap-highlight-color: transparent; }
+  .actions button:active { background: #313a63; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <span id="dot" class="dot off"></span>
+    <span id="status">未连接</span>
+    <label class="cfg">键盘回车操作
+      <select id="enter">
+        <option value="shift+enter">Shift+Enter</option>
+        <option value="ctrl+enter">Ctrl+Enter</option>
+        <option value="alt+enter">Alt+Enter</option>
+        <option value="enter" selected>Enter</option>
+      </select>
+    </label>
+  </div>
+
+  <!-- 点击此区唤起手机键盘/语音；纯输入法，无本地编辑框 -->
+  <div id="tap" class="tap">点击这里开始输入<br>（唤起手机键盘/语音，直接进电脑光标处）</div>
+  <input id="ime" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+         x-webkit-speech inputmode="text">
+
+  <div class="last-title">上一次操作（发给电脑）</div>
+  <div id="last" class="last empty">（无）</div>
+
+  <div class="keys-title">快捷键（发送到电脑）</div>
+  <div class="keys">
+    <button data-key="left">←</button>
+    <button data-key="up">↑</button>
+    <button data-key="down">↓</button>
+    <button data-key="right">→</button>
+    <button data-key="enter">⏎</button>
+    <button data-key="home">Home</button>
+    <button data-key="end">End</button>
+    <button data-key="delete">Del</button>
+    <button data-key="backspace">⌫</button>
+    <button data-key="tab">Tab</button>
+    <button class="ctrl" data-key="selectall">全选</button>
+    <button class="ctrl" data-key="copy">复制</button>
+    <button class="ctrl" data-key="paste">粘贴</button>
+    <button class="ctrl" data-key="cut">剪切</button>
+    <button class="ctrl" data-key="undo">撤销</button>
+  </div>
+
+  <div class="actions">
+    <button id="clear">仅清空电脑</button>
+  </div>
+  <div class="hint">没有本地编辑框：手机只当输入法，文字实时插入电脑光标处。显示区仅用于核对，不会重复发送。</div>
+</div>
+<script>
+const ime = document.getElementById('ime');
+const tap = document.getElementById('tap');
+const lastEl = document.getElementById('last');
+const dot = document.getElementById('dot');
+const status = document.getElementById('status');
+const enterSel = document.getElementById('enter');
+const clearBtn = document.getElementById('clear');
+let ws = null;
+
+function setConn(on) {
+  dot.className = "dot " + (on ? "on" : "off");
+  status.textContent = on ? "已连接" : "未连接，重连中…";
+}
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const wshost = location.hostname + ":8766";
+  ws = new WebSocket(proto + "://" + wshost + "/");
+  ws.onopen = () => {
+    setConn(true);
+    ws.send(JSON.stringify({ type: "cfg", enter: enterSel.value }));
+  };
+  ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+connect();
+
+enterSel.addEventListener('change', () => {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: "cfg", enter: enterSel.value }));
+  }
+});
+
+// 点击触发区：唤起键盘（聚焦隐藏输入域）
+tap.addEventListener('click', () => { ime.focus(); });
+
+// 增量发送：把隐藏输入域的"本次新增/删除"发给电脑，在焦点框光标处插入/退格。
+// 用字符串 diff（最长公共前缀/后缀）算真正增删，软键盘删除（无选区）也能识别。
+let prevVal = "";
+let timer = null;
+
+function diffDelta(prev, cur) {
+  let s = 0;
+  const minLen = Math.min(prev.length, cur.length);
+  while (s < minLen && prev[s] === cur[s]) s++;
+  let e = 0;
+  while (e < (minLen - s) &&
+         prev[prev.length - 1 - e] === cur[cur.length - 1 - e]) e++;
+  return { del: prev.length - s - e, ins: cur.slice(s, cur.length - e) };
+}
+
+// 键名 -> 中文显示
+const KEY_LABEL = {
+  left: "← 方向左", right: "→ 方向右", up: "↑ 方向上", down: "↓ 方向下",
+  home: "Home", end: "End", delete: "Del 删除", backspace: "⌫ 退格",
+  tab: "Tab", enter: "⏎ 回车", selectall: "全选", copy: "复制",
+  paste: "粘贴", cut: "剪切", undo: "撤销"
+};
+
+// 按操作细分显示上一次操作：输入了哪些文字 / 按了哪个键
+function showLast(html) {
+  if (html === "") {
+    lastEl.textContent = "（无）";
+    lastEl.className = "last empty";
+  } else {
+    lastEl.innerHTML = html;
+    lastEl.className = "last";
+  }
+}
+
+// 操作类型：text(文字) / key(单键，可多次) / clear(清空电脑)
+function fmtOp(kind, payload) {
+  if (kind === "text") {
+    const safe = payload.replace(/[&<>]/g, c =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    return '<span class="op">输入</span><span class="txt">“' + safe + '”</span>';
+  }
+  if (kind === "key") {
+    const labels = payload.map(n => KEY_LABEL[n] || n);
+    return '<span class="op">按键</span><span class="key">' +
+      labels.join("、") + "</span>";
+  }
+  if (kind === "clear") {
+    return '<span class="key">清空电脑</span>';
+  }
+  return "";
+}
+
+// 结算隐藏输入域里"本次新增/删除"并发出。回车前必须先结算，
+// 否则文字会排到回车之后才发到电脑上。
+function flushInput() {
+  if (timer) { clearTimeout(timer); timer = null; }
+  const cur = ime.value;
+  const { del, ins } = diffDelta(prevVal, cur);
+  // 软键盘删除（含删到最后一个字、选中删除）一律转发为对应数量退格：
+  // 纯输入法界面里手机框清空只能来自用户主动删除，删到空也是真实意图，
+  // 不再做"整框清空"保守跳过，避免电脑上最后一个字删不掉。
+  if (ws && ws.readyState === 1) {
+    const keys = [];
+    for (let i = 0; i < del; i++) keys.push("backspace");
+    keys.forEach(n => ws.send(JSON.stringify({ type: "key", name: n })));
+    if (ins !== "") ws.send(ins);
+  }
+  prevVal = cur;
+  // 细分本次操作：输入文字 / 按退格
+  if (del > 0 && ins !== "") {
+    showLast(fmtOp("key", Array(del).fill("backspace")) + " " + fmtOp("text", ins));
+  } else if (del > 0) {
+    showLast(fmtOp("key", Array(del).fill("backspace")));
+  } else if (ins !== "") {
+    showLast(fmtOp("text", ins));
+  }
+}
+
+ime.addEventListener('input', () => {
+  if (timer) return;
+  timer = setTimeout(flushInput, 60);
+});
+
+// 回车：隐藏输入域是单行 input，手机软键盘按回车不会在 value 里产生换行，
+// 只靠 input 事件的话回车会被完全忽略，所以必须单独捕获 keydown。
+ime.addEventListener('keydown', (e) => {
+  if (e.key !== "Enter" && e.keyCode !== 13) return;
+  e.preventDefault();
+  flushInput();  // 先把未结算的文字发出去，保证文字在回车之前
+  const label = enterSel.options[enterSel.options.selectedIndex].text;
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: "enter" }));
+  }
+  showLast('<span class="op">按键</span><span class="key">' + label + "</span>");
+});
+
+// 仅清空：清空电脑焦点框（不回车）。手机输入域不清（保留以便继续输入/核对）。
+clearBtn.addEventListener('click', () => {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "clear" }));
+  showLast(fmtOp("clear"));
+});
+
+// 快捷键按钮：发送 {type:"key", name:"..."}
+document.querySelectorAll('.keys button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "key", name: btn.dataset.key }));
+    }
+    showLast(fmtOp("key", [btn.dataset.key]));
+  });
+});
+</script>
+</body>
+</html>

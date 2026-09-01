@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+*.log
+
+# 本地编辑器 / 系统与辅助工具数据，不随源码发布
+.codebuddy/
+.idea/
+.vscode/
+.DS_Store
+
+# 发布时临时生成的 Release 说明，不进仓库
+release_notes.md
